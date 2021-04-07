@@ -10,10 +10,10 @@ import org.tensorflow.SavedModelBundle;
 import org.tensorflow.Session;
 import org.tensorflow.Tensor;
 import org.tensorflow.Tensors;
+import org.tensorflow.framework.ConfigProto;
+import org.tensorflow.framework.GPUOptions;
 
-import java.util.List;
-import java.util.NavigableMap;
-import java.util.TreeMap;
+import java.util.*;
 import java.util.concurrent.TimeUnit;
 
 
@@ -29,28 +29,26 @@ public class FeatureExtractor {
      * @param sentence
      * @return
      */
-    public static float[] execute(String modelPath, String sentence) {
+    public float[] execute(String modelPath, String sentence) {
         int seqLength = 128;
         int hiddenSize = 6;
 
-        FeatureExtractor featureExtractor = new FeatureExtractor();
-        InputVector inputVector = featureExtractor.sentenceToVector(sentence, seqLength);
-        String strInputIds = StringUtils.join(inputVector.getInputIds(), ",");
-        String strInputMask = StringUtils.join(inputVector.getInputMask(), ",");
-        String strSegmentIds = StringUtils.join(inputVector.getSegmentIds(), ",");
-        System.out.println("inputVector.getInputIds() = " + strInputIds);
-        System.out.println("inputVector.getInputMask() = " + strInputMask);
-        System.out.println("inputVector.segmentIds = " + strSegmentIds);
+        Stopwatch stopwatch = Stopwatch.createStarted();
+        InputVector inputVector = this.sentenceToVector(sentence, seqLength);
+        System.out.println(String.format("sentenceToVector, time cost %d ms", stopwatch.elapsed(TimeUnit.MILLISECONDS)));
 
-        Tensor<Integer> inputIds = fromStringToTensor(strInputIds, seqLength);
-        Tensor<Integer> inputMask = fromStringToTensor(strInputMask, seqLength);
-        Tensor<Integer> segmentIds = fromStringToTensor(strSegmentIds, seqLength);
+        Tensor<Integer> inputIds = listToTensor(inputVector.getInputIds(), seqLength);
+        Tensor<Integer> inputMask = listToTensor(inputVector.getInputMask(), seqLength);
+        Tensor<Integer> segmentIds = listToTensor(inputVector.getSegmentIds(), seqLength);
+        System.out.println(String.format("listToTensor, time cost %d ms", stopwatch.elapsed(TimeUnit.MILLISECONDS)));
 
-        return featureExtractor.predict(modelPath, hiddenSize, inputIds, inputMask, segmentIds);
+
+        return this.predict(modelPath, hiddenSize, inputIds, inputMask, segmentIds);
     }
 
     private float[] predict(String modelPath, int hiddenSize, Tensor<Integer> inputIds, Tensor<Integer> inputMask, Tensor<Integer> segmentIds) {
-        try (Session sess = SavedModelBundle.load(modelPath, "serve").session()) {
+        SavedModelBundle bundle = getModelBundle(modelPath);
+        try (Session sess = bundle.session()) {
             Stopwatch stopwatch = Stopwatch.createStarted();
             List<Tensor<?>> tensors = sess.runner()
                     .feed("input_ids", inputIds)
@@ -67,6 +65,27 @@ public class FeatureExtractor {
         }
     }
 
+    private SavedModelBundle getModelBundle(String modelPath) {
+        Map<String, Integer> hashMap = new HashMap<>();
+        hashMap.put("CPU", 4);
+//        hashMap.put("GPU", 1);
+        ConfigProto configProto = ConfigProto.newBuilder()
+                .putAllDeviceCount(hashMap)
+                .setInterOpParallelismThreads(3)
+                .setIntraOpParallelismThreads(3)
+                .setAllowSoftPlacement(true)
+                .setGpuOptions(GPUOptions.newBuilder()
+                        .setAllowGrowth(true)
+                        .setPerProcessGpuMemoryFraction(0.9)
+                        .build())
+                .build();
+        SavedModelBundle bundle = SavedModelBundle
+                .loader(modelPath)
+                .withConfigProto(configProto.toByteArray())
+                .withTags("serve").load();
+        return bundle;
+    }
+
     public InputVector sentenceToVector(String sentence, int maxSeqLength) {
         String vocalPath = this.getClass().getClassLoader().getResource("vocab.txt").getPath();
         NavigableMap<String, Integer> navMap = new TreeMap<>();
@@ -80,6 +99,15 @@ public class FeatureExtractor {
 
         InputVector inputVector = new InputVector.Builder(vocab, tokenizerTokens, maxSeqLength).build();
         return inputVector;
+    }
+
+    private static Tensor<Integer> listToTensor(List<Integer> input, int length) {
+        int[] arr = input.stream()
+                .mapToInt(x -> Integer.valueOf(x))
+                .toArray();
+        Preconditions.checkArgument(length == arr.length);
+        Tensor<Integer> tensor = Tensors.create(new int[][]{arr});
+        return tensor;
     }
 
     private static Tensor<Integer> fromStringToTensor(String input, int length) {

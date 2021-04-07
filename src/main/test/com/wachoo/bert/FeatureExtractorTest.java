@@ -1,5 +1,6 @@
 package com.wachoo.bert;
 
+
 import org.junit.jupiter.api.Test;
 
 class FeatureExtractorTest {
