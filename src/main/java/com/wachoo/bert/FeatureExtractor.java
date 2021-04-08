@@ -21,54 +21,23 @@ import java.util.concurrent.TimeUnit;
  * @Time : 2021/4/2 10:01
  */
 public class FeatureExtractor {
-
-    private String modelPath;
-    private String sentence;
-    private int hiddenSize;
-    private int seqLength;
+    private String sentence = "ABC";
+    private Integer seqLength = 128;
+    private Model model;
+    private String vocabPath;
 
     public FeatureExtractor() {
     }
 
-    public FeatureExtractor(Builder builder) {
-        modelPath = builder.modelPath;
-        sentence = builder.sentence;
-        hiddenSize = builder.hiddenSize;
-        seqLength = builder.seqLength;
+    public FeatureExtractor(Model model, String sentence) {
+        this.sentence = sentence;
+        this.model = model;
+        this.vocabPath = FeatureExtractor.class.getClassLoader().getResource("vocab.txt").getPath();
+
     }
 
-    public static Builder newBuilder() {
-        return new FeatureExtractor.Builder();
-    }
-    public static class Builder {
-        private String modelPath;
-        private String sentence = "ABC";
-        private int hiddenSize = 6;
-        private int seqLength = 128;
-
-        private Builder() {
-        }
-
-        public FeatureExtractor build() {
-            return new FeatureExtractor(this);
-        }
-
-        public Builder modelPath(String modelPath) {
-            this.modelPath = modelPath;
-            return this;
-        }
-        public Builder sentence(String sentence) {
-            this.sentence = sentence;
-            return this;
-        }
-        public Builder hiddenSize(int hiddenSize) {
-            this.hiddenSize = hiddenSize;
-            return this;
-        }
-        public Builder seqLength(int seqLength) {
-            this.seqLength = seqLength;
-            return this;
-        }
+    public void setSeqLength(Integer seqLength) {
+        this.seqLength = seqLength;
     }
 
     /**
@@ -85,54 +54,12 @@ public class FeatureExtractor {
         Tensor<Integer> segmentIds = listToTensor(inputVector.getSegmentIds(), seqLength);
         System.out.println(String.format("listToTensor, time cost %d ms", stopwatch.elapsed(TimeUnit.MILLISECONDS)));
 
-
-        return this.predict(inputIds, inputMask, segmentIds);
-    }
-
-    private float[] predict(Tensor<Integer> inputIds, Tensor<Integer> inputMask, Tensor<Integer> segmentIds) {
-        SavedModelBundle bundle = getModelBundle(modelPath);
-        try (Session sess = bundle.session()) {
-            Stopwatch stopwatch = Stopwatch.createStarted();
-            List<Tensor<?>> tensors = sess.runner()
-                    .feed("input_ids", inputIds)
-                    .feed("input_mask", inputMask)
-                    .feed("segment_ids", segmentIds)
-                    .fetch("loss/Softmax")
-                    .run();
-            Tensor out = tensors.get(0);
-            System.out.println(String.format("predicted, time cost %d ms", stopwatch.elapsed(TimeUnit.MILLISECONDS)));
-
-            float[][] outArr = new float[1][hiddenSize];
-            out.copyTo(outArr);
-            return outArr[0];
-        }
-    }
-
-    private SavedModelBundle getModelBundle(String modelPath) {
-        Map<String, Integer> hashMap = new HashMap<>();
-        hashMap.put("CPU", 4);
-        hashMap.put("GPU", 4);
-        ConfigProto configProto = ConfigProto.newBuilder()
-                .putAllDeviceCount(hashMap)
-                .setInterOpParallelismThreads(3)
-                .setIntraOpParallelismThreads(3)
-                .setAllowSoftPlacement(true)
-                .setGpuOptions(GPUOptions.newBuilder()
-                        .setAllowGrowth(true)
-                        .setPerProcessGpuMemoryFraction(0.2)
-                        .build())
-                .build();
-        SavedModelBundle bundle = SavedModelBundle
-                .loader(modelPath)
-                .withConfigProto(configProto.toByteArray())
-                .withTags("serve").load();
-        return bundle;
+        return model.predict(inputIds, inputMask, segmentIds);
     }
 
     public InputVector sentenceToVector(String sentence, int maxSeqLength) {
-        String vocalPath = this.getClass().getClassLoader().getResource("vocab.txt").getPath();
         NavigableMap<String, Integer> navMap = new TreeMap<>();
-        TokenUtil.readAllLinesToMap(vocalPath, navMap);
+        TokenUtil.readAllLinesToMap(this.vocabPath, navMap);
         NavigableMap<String, Integer> vocab = navMap.descendingMap();
 
         TokenPreProcess preTokenizePreProcessor = new CVWordPiecePreProcessor(true, true, vocab);
